@@ -1,0 +1,132 @@
+{
+  "version": "0.1.0",
+  "created": "2025-10-31T16:06:22.268933Z",
+  "description": "PromptWork: A cross-model LLM workload dataset capturing prompt features, answers, token lengths, and serving metrics.",
+  "fields": [
+    {
+      "name": "sample_id",
+      "type": "string",
+      "desc": "Unique identifier for the (prompt, model) pair."
+    },
+    {
+      "name": "prompt_id",
+      "type": "string",
+      "desc": "Identifier for the prompt across models."
+    },
+    {
+      "name": "model_family",
+      "type": "string",
+      "desc": "e.g., llama-2, llama-3, mistral, qwen, gpt-4o, etc."
+    },
+    {
+      "name": "model_name",
+      "type": "string",
+      "desc": "Exact model name/checkpoint identifier."
+    },
+    {
+      "name": "engine",
+      "type": "string",
+      "desc": "Serving engine (transformers, vllm, openai, anthropic, etc.)."
+    },
+    {
+      "name": "temperature",
+      "type": "number",
+      "desc": "Sampling temperature."
+    },
+    {
+      "name": "top_p",
+      "type": "number",
+      "desc": "Top-p nucleus sampling."
+    },
+    {
+      "name": "max_new_tokens",
+      "type": "integer",
+      "desc": "Decode cap used for the run."
+    },
+    {
+      "name": "stop_sequences",
+      "type": "array",
+      "desc": "Stop strings, if any."
+    },
+    {
+      "name": "prompt_text",
+      "type": "string",
+      "desc": "Raw prompt."
+    },
+    {
+      "name": "response_text",
+      "type": "string",
+      "desc": "Raw model answer/continuation."
+    },
+    {
+      "name": "input_tokens",
+      "type": "integer",
+      "desc": "Tokenizer-based count of input tokens."
+    },
+    {
+      "name": "output_tokens",
+      "type": "integer",
+      "desc": "Tokenizer-based count of output tokens."
+    },
+    {
+      "name": "ttft_ms",
+      "type": "number",
+      "desc": "Time-to-first-token (ms)."
+    },
+    {
+      "name": "tpot_ms",
+      "type": "number",
+      "desc": "Average time-per-output-token (ms/token)."
+    },
+    {
+      "name": "e2e_latency_ms",
+      "type": "number",
+      "desc": "End-to-end latency (ms)."
+    },
+    {
+      "name": "gpu_name",
+      "type": "string",
+      "desc": "GPU device name."
+    },
+    {
+      "name": "gpu_vram_gb",
+      "type": "number",
+      "desc": "VRAM capacity in GiB."
+    },
+    {
+      "name": "batch_size",
+      "type": "integer",
+      "desc": "Batch size used in serving engine."
+    },
+    {
+      "name": "np_parallel",
+      "type": "integer",
+      "desc": "Concurrent sequences (NP) used, if applicable."
+    },
+    {
+      "name": "context_window",
+      "type": "integer",
+      "desc": "Model context window used."
+    },
+    {
+      "name": "features_json",
+      "type": "string",
+      "desc": "JSON-encoded prompt feature dictionary."
+    },
+    {
+      "name": "domain",
+      "type": "string",
+      "desc": "Domain label (chat, code, math, QA, summarization, etc.)."
+    },
+    {
+      "name": "source",
+      "type": "string",
+      "desc": "Prompt source (synthetic, gsm8k, squad, humaneval, internal, etc.)."
+    },
+    {
+      "name": "license",
+      "type": "string",
+      "desc": "License or usage constraints for the row."
+    }
+  ]
+}
