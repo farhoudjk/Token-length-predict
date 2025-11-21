@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "token-length-predict"
+version = "0.1.0"
+description = "Tools to collect prompt→response datasets and predict token lengths."
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [ { name = "Your Name", email = "you@example.com" } ]
+license = { text = "MIT" }
+dependencies = [
+  "vllm",
+  "transformers",
+  "accelerate",
+  "pandas",
+  "pyarrow",
+]
+
+[project.optional-dependencies]
+dev = [
+  "black",
+  "isort",
+  "flake8",
+  "pytest",
+  "mypy",
+  "pre-commit",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py39"]
+
+[tool.isort]
+profile = "black"
