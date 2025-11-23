@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 import os, sys, csv, json, time, uuid, argparse
+import multiprocessing as mp
+
+# Ensure spawn start method to avoid fork-related CUDA issues when running on GPU
+try:
+    mp.set_start_method("spawn", force=True)
+except RuntimeError:
+    # start method already set; continue
+    pass
 from pathlib import Path
 from typing import List, Dict, Any
 from vllm import LLM, SamplingParams
@@ -48,7 +56,14 @@ def write_rows_csv_batch(
     mode = "w" if write_header else "a"
     with open(path, mode, newline="", encoding="utf-8") as f:
         fieldnames = list(rows[0].keys())
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        # Use an escapechar and explicit quoting to handle text containing
+        # characters that require escaping (newlines, quotes, etc.).
+        writer = csv.DictWriter(
+            f,
+            fieldnames=fieldnames,
+            escapechar="\\",
+            quoting=csv.QUOTE_MINIMAL,
+        )
         if write_header:
             writer.writeheader()
         writer.writerows(rows)
@@ -82,7 +97,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prompts_csv", required=True)
     ap.add_argument("--out_csv", required=True)
-    ap.add_argument("--model_name", default="meta-llama/Llama-3.1-8B-instruct")
+    ap.add_argument("--model_name", default=None,
+                    help="Model name or path (if omitted, read from config/models.json)")
     ap.add_argument("--batch_size", type=int, default=16, help="Parallel sequences per batch")
     ap.add_argument("--ctx_cap", type=int, default=4096, help="Soft cap on max model length for speed")
     ap.add_argument("--natural_stop", action="store_true", help="Greedy decoding (temperature=0)")
@@ -94,9 +110,27 @@ def main():
 
     rows_in = read_prompts_csv(args.prompts_csv)
 
+    # Try to read default model from config/models.json if model_name not provided
+    chosen_model = args.model_name
+    try:
+        # SCRIPT_DIR is the scripts/ directory; config is at repo_root/config/models.json
+        config_path = SCRIPT_DIR.parent / "config" / "models.json"
+        if chosen_model is None and config_path.exists():
+            with open(config_path, "r", encoding="utf-8") as cf:
+                cfg_json = json.load(cf)
+                chosen_model = cfg_json.get("default_model")
+    except Exception:
+        chosen_model = chosen_model or None
+
+    if chosen_model is None:
+        # fallback to a sensible default if nothing found
+        chosen_model = "meta-llama/Llama-3.1-8B-instruct"
+
+    print(f"Using model: {chosen_model}")
+
     # vLLM init
     llm = LLM(
-        model=args.model_name,
+        model=chosen_model,
         dtype="float16",
         tensor_parallel_size=args.tensor_parallel_size,
         max_model_len=args.ctx_cap,
@@ -110,7 +144,7 @@ def main():
         natural_stop=args.natural_stop,
         max_time=args.max_time,
         ctx_cap=args.ctx_cap,
-        model_name=args.model_name,
+        model_name=chosen_model,
     )
 
     def input_len(p: str) -> int:

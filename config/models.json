@@ -1,0 +1,22 @@
+{
+  "default_model": "TheBloke/Llama-2-7B-Chat-AWQ",
+  "models": [
+    {
+      "id": "TheBloke/Llama-2-7B-Chat-AWQ",
+      "display_name": "Llama-2-7B-Chat AWQ",
+      "quantized": true,
+      "backend": "awq_marlin",
+      "tested_on": "2025-11-23",
+      "status": "working",
+      "notes": "Used for v2 run; produced out_v2.csv successfully."
+    },
+    {
+      "id": "ClassiCC-Corpus/Curio-7b",
+      "display_name": "Curio-7b",
+      "quantized": false,
+      "tested_on": "2025-11-23",
+      "status": "listed",
+      "notes": "Appeared in model info but not used for inference in this session."
+    }
+  ]
+}

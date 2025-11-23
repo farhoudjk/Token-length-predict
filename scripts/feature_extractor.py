@@ -1,4 +1,3 @@
-
 import re
 import json
 from typing import Dict
@@ -18,7 +17,11 @@ def extract_prompt_features(prompt: str) -> Dict[str, float]:
     has_url = int(bool(re.search(r"https?://", text)))
     has_table = int(("|" in text and "---" in text) or ("table" in text.lower()))
     has_list = int(bool(re.search(r"^\s*[-*]\s", text, flags=re.M)))
-    has_math = int(bool(re.search(r"(\$[^$]+\$)|\\begin\{equation\}", text)))
+
+    # UPDATED: detect LaTeX math OR simple arithmetic expressions with + - * /
+    math_pattern = r"(\$[^$]+\$)|\\begin\{equation\}|\d+\s*[\+\-\*/]\s*\d+"
+    has_math = int(bool(re.search(math_pattern, text)))
+
     caps_ratio = sum(1 for c in text if c.isupper()) / max(1, n_chars)
     punct_density = sum(1 for c in text if c in PUNCT) / max(1, n_chars)
     avg_line_len = n_chars / max(1, n_lines)
