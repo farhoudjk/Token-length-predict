@@ -40,6 +40,16 @@ By default the script resolves the tokenizer/model id from `config/models.json` 
 
 ### Example commands
 
+
+python3 scripts/run_inference_vllm.py \
+    --dataset_name "databricks/databricks-dolly-15k" \
+    --num_prompts 5000 \
+    --model_name "TheBloke/Llama-2-7B-Chat-AWQ" \
+    --out_csv "dolly_inference_results_llama2_awq.csv" \
+    --batch_size 20 \
+    --ctx_cap 4096
+
+    
 ```bash
 # RandomForest + live vLLM generations (4K max tokens)
 python scripts/evaluate_real_datasets.py \
@@ -62,4 +72,7 @@ python scripts/evaluate_real_datasets.py \
   --generation-max-new-tokens 4096 \
   --generation-batch-size 8 \
   --output-dir out/real_dataset_eval_xgb_live4096
+
+
+  
 ```
