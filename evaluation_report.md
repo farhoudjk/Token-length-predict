@@ -4,9 +4,9 @@ This report compares the two trained classifiers on three public datasets. The R
 
 | Dataset    | Domain                 | Samples | RF Accuracy | RF Long Support | XGB Accuracy | XGB Long Support | Notes |
 |-----------|------------------------|---------|-------------|-----------------|--------------|------------------|-------|
-| Alpaca    | General instruction    | 200     | **0.77**    | 30 live long answers (4 predicted correctly) | **0.835** | 1 long reference | RF predicted more long outputs, better reflecting live generations. XGB simply labeled everything short because the dataset hardly ever exceeds 500 tokens. |
-| Dolly 15k | Business conversation  | 200     | **0.765**   | 44 live long answers (1 correct) | **0.905** | 2 long references | Same pattern—live generations created long responses much more often than the stored Dolly labels. |
-| UltraChat | Multi-turn support     | 150     | **0.56**    | 73 live long answers (7 correct) | **0.813** | 24 long references | vLLM produced many long replies so RF performance dropped sharply; the static dataset still skews short, inflating XGB accuracy. |
+| Alpaca    | General instruction    | 200     | **0.77**    | 30 live long answers (4 predicted correctly) | **0.69**  | 50 live long answers (6 predicted correctly) | Both models now evaluated on live vLLM generations. XGB still struggles to capture long outputs despite the richer positive set. |
+| Dolly 15k | Business conversation  | 200     | **0.765**   | 44 live long answers (1 correct) | **0.75**  | 47 live long answers (1 predicted correctly) | XGB accuracy dropped sharply once judged against the same generated completions as RF. |
+| UltraChat | Multi-turn support     | 150     | **0.56**    | 73 live long answers (7 correct) | **0.52**  | 79 live long answers (7 predicted correctly) | UltraChat remains the hardest domain — both models predict long responses poorly even though half the outputs exceed 500 tokens. |
 
 ### Metrics (direct from summaries)
 
@@ -16,15 +16,15 @@ This report compares the two trained classifiers on three public datasets. The R
   - UltraChat: macro F1 0.438, weighted F1 0.445; confusion matrix `[[77, 0], [66, 7]]`.
   - `output_source`: `vllm:TheBloke/Llama-2-7B-Chat-AWQ`.
 
-- **XGBoost (`out/real_dataset_eval_xgb/summary.json`)**
-  - Alpaca: macro F1 0.455, weighted F1 0.906; confusion matrix `[[167, 32], [1, 0]]`.
-  - Dolly: macro F1 0.475, weighted F1 0.941; confusion matrix `[[181, 17], [2, 0]]`.
-  - UltraChat: macro F1 0.536, weighted F1 0.780; confusion matrix `[[119, 7], [21, 3]]`.
-  - `output_source`: `dataset`.
+- **XGBoost (`out/real_dataset_eval_xgb_live4096/summary.json`)**
+  - Alpaca: macro F1 0.486, weighted F1 0.648; confusion matrix `[[132, 18], [44, 6]]`.
+  - Dolly: macro F1 0.447, weighted F1 0.664; confusion matrix `[[149, 4], [46, 1]]`.
+  - UltraChat: macro F1 0.413, weighted F1 0.400; confusion matrix `[[71, 0], [72, 7]]`.
+  - `output_source`: `vllm:TheBloke/Llama-2-7B-Chat-AWQ`.
 
 ### Takeaways
-1. **Ground truth choice matters**: Live generations revealed that real completions often exceed 500 tokens, which stressed the RF classifier and exposed its limited recall for long outputs. Evaluating against the lightly populated dataset references makes any model appear vastly more accurate because nearly all examples are short.
-2. **Imbalanced class hurts macro metrics**: Across both models the “long” class had poor precision/recall because the training data and evaluation prompts are dominated by short answers. Macro averages emphasize this, dropping below 0.55 for every dataset/model pair.
+1. **Ground truth choice matters**: Once both models were judged on the same live outputs, XGBoost’s apparent edge vanished (it now trails RF on every dataset). This underlines how misleading the dataset-reference evaluation was.
+2. **Imbalanced class hurts macro metrics**: Even with live generations introducing many long completions, recall for the long class hovers below 10% on Dolly and UltraChat. Macro averages remain <0.5 across the board.
 3. **Next steps**
    - Free GPU memory (or lower `VLLM_GPU_MEMORY_UTILIZATION`) and rerun XGB with `--generate-with-vllm` to compare models under the same live-ground-truth regime.
    - Revisit the threshold (500 tokens) or sample more long-form prompts so both models see a healthier positive class.
@@ -32,7 +32,8 @@ This report compares the two trained classifiers on three public datasets. The R
 
 All raw outputs and per-prompt predictions live in:
 - `out/real_dataset_eval/*.csv`
-- `out/real_dataset_eval_xgb/*.csv`
+- `out/real_dataset_eval_rf_live4096/*.csv`
+- `out/real_dataset_eval_xgb_live4096/*.csv`
 
 Re-run commands:
 ```bash
