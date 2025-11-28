@@ -5,3 +5,7 @@ transformers
 accelerate
 pandas
 pyarrow
+datasets
+scikit-learn
+xgboost
+joblib
