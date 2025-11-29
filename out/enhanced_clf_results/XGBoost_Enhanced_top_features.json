@@ -1,0 +1,22 @@
+{
+  "detailed_keywords": 0.13622607290744781,
+  "analytical_keywords": 0.12373542040586472,
+  "line_count": 0.10286639630794525,
+  "word_count": 0.06643147021532059,
+  "colon_count": 0.04464246705174446,
+  "paragraph_count": 0.038648031651973724,
+  "code_keywords": 0.031839508563280106,
+  "numbers_count": 0.027977462857961655,
+  "list_keywords": 0.025493811815977097,
+  "sentence_count": 0.02519194781780243,
+  "proper_noun_density": 0.02036120742559433,
+  "avg_line_len": 0.020354505628347397,
+  "unique_word_ratio": 0.0197695754468441,
+  "avg_sentence_len": 0.01951214298605919,
+  "brief_keywords": 0.018628302961587906,
+  "has_quotes": 0.018597738817334175,
+  "caps_ratio": 0.018389375880360603,
+  "has_math": 0.016894156113266945,
+  "punct_density": 0.01686597615480423,
+  "char_len": 0.016619345173239708
+}

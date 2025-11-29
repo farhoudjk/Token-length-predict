@@ -1,0 +1,22 @@
+{
+  "prompt_char_len": 0.07624983488934728,
+  "char_len": 0.07560946565489704,
+  "caps_ratio": 0.07341533630537443,
+  "avg_word_len": 0.07268007870011049,
+  "avg_line_len": 0.0718885220629338,
+  "punct_density": 0.06512106138966352,
+  "avg_syllables": 0.0649151370072434,
+  "word_count": 0.05956448729510095,
+  "unique_word_ratio": 0.05886295049864642,
+  "prompt_word_count": 0.05773745718746088,
+  "proper_noun_density": 0.04522261855531686,
+  "avg_sentence_len": 0.044414053248458554,
+  "numbers_count": 0.02931412380957316,
+  "code_keywords": 0.02536035587457853,
+  "sentence_count": 0.021065478199696046,
+  "line_count": 0.01874774328891343,
+  "sub_questions": 0.017924028903152533,
+  "paragraph_count": 0.01630892437816934,
+  "analytical_keywords": 0.01621300315827987,
+  "question_types": 0.015350948005298383
+}

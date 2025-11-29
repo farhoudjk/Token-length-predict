@@ -1,0 +1,20 @@
+[
+  "char_len",
+  "line_count",
+  "word_count",
+  "question_marks",
+  "exclamation_marks",
+  "backticks",
+  "code_fences",
+  "has_url",
+  "has_table",
+  "has_list",
+  "has_math",
+  "caps_ratio",
+  "punct_density",
+  "avg_line_len",
+  "avg_word_len",
+  "prompt_char_len",
+  "prompt_word_count",
+  "prompt_has_question_mark"
+]
