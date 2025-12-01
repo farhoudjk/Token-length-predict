@@ -4,7 +4,7 @@ import re
 import os
 from typing import Dict
 
-INPUT_PATH = "out/dolly_inference_results_llama2_awq.csv"
+INPUT_PATH = "out/dolly_inference_results_llama2_awq (1).csv"
 OUTPUT_PATH = "out/dolly_inference_results_llama2_awq_with_new_features.csv"
 
 # -----------------------------

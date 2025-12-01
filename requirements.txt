@@ -1,5 +1,6 @@
 # Minimal requirements inferred from scripts and README
 # Note: install GPU-specific builds of torch separately if needed.
+numpy<2
 vllm
 transformers
 accelerate

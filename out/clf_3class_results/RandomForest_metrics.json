@@ -1,21 +1,21 @@
 {
-  "accuracy": 0.7353139770425389,
+  "accuracy": 0.7783155856727977,
   "confusion_matrix": [
     [
-      891,
-      125,
-      13
+      1430,
+      123,
+      22
     ],
     [
-      141,
-      162,
-      27
+      149,
+      148,
+      40
     ],
     [
-      54,
-      32,
-      36
+      90,
+      34,
+      30
     ]
   ],
-  "classification_report": "              precision    recall  f1-score   support\n\n       short     0.8204    0.8659    0.8426      1029\n      medium     0.5078    0.4909    0.4992       330\n        long     0.4737    0.2951    0.3636       122\n\n    accuracy                         0.7353      1481\n   macro avg     0.6007    0.5506    0.5685      1481\nweighted avg     0.7222    0.7353    0.7266      1481\n"
+  "classification_report": "              precision    recall  f1-score   support\n\n       short     0.8568    0.9079    0.8816      1575\n      medium     0.4852    0.4392    0.4611       337\n        long     0.3261    0.1948    0.2439       154\n\n    accuracy                         0.7783      2066\n   macro avg     0.5560    0.5140    0.5289      2066\nweighted avg     0.7566    0.7783    0.7655      2066\n"
 }
