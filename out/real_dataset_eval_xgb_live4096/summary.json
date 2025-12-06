@@ -1,0 +1,28 @@
+[
+  {
+    "dataset": "ultrachat",
+    "domain": "multi_turn_support",
+    "samples": 150,
+    "accuracy": 0.4666666666666667,
+    "confusion_matrix": [
+      [
+        62,
+        2,
+        0
+      ],
+      [
+        68,
+        8,
+        0
+      ],
+      [
+        10,
+        0,
+        0
+      ]
+    ],
+    "report": "              precision    recall  f1-score   support\n\n       short     0.4429    0.9688    0.6078        64\n      medium     0.8000    0.1053    0.1860        76\n        long     0.0000    0.0000    0.0000        10\n\n    accuracy                         0.4667       150\n   macro avg     0.4143    0.3580    0.2646       150\nweighted avg     0.5943    0.4667    0.3536       150\n",
+    "predictions_csv": "out/real_dataset_eval_xgb_live4096/ultrachat_predictions.csv",
+    "output_source": "vllm:TheBloke/Llama-2-7B-Chat-AWQ"
+  }
+]

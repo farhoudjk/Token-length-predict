@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Evaluate the length classifier on several public datasets.
 
-The script loads a trained classifier (RF or XGBoost), computes the same
+The script loads a trained classifier (RF, XGBoost, etc.), computes the same
 feature set that was used during training, and compares the predicted
-length class (<500 vs. >500 tokens) against the actual token count of
+length class (short/medium/long) against the actual token count of
 ground-truth responses contained in real datasets.
 
 Example:
@@ -15,13 +15,14 @@ Example:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import sys
 import multiprocessing as mp
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 
@@ -53,6 +54,8 @@ except ImportError:
 
 
 FeatureDict = Dict[str, float]
+CLASS_NAMES = {0: "short", 1: "medium", 2: "long"}
+CLASS_ORDER = [0, 1, 2]
 
 
 def chunked(seq: List[str], size: int) -> Iterable[List[str]]:
@@ -254,6 +257,15 @@ def prepare_features(prompts: Iterable[str]) -> List[FeatureDict]:
     return feats
 
 
+def length_class_from_tokens(token_count: int, short_threshold: int, medium_threshold: int) -> int:
+    """Return 0/1/2 depending on the token thresholds."""
+    if token_count <= short_threshold:
+        return 0
+    if token_count <= medium_threshold:
+        return 1
+    return 2
+
+
 def count_tokens(text: str, tokenizer) -> int:
     if not text:
         return 0
@@ -282,7 +294,7 @@ def evaluate_dataset(
     scaler,
     feature_cols: List[str],
     tokenizer,
-    threshold: int,
+    thresholds: Tuple[int, int],
     output_dir: str,
     text_generator: Optional[VLLMGenerator] = None,
 ) -> Dict[str, Any]:
@@ -324,20 +336,36 @@ def evaluate_dataset(
         X = pd.DataFrame(scaled, columns=feature_cols)
 
     predictions = model.predict(X)
-    probas = None
+    probas: Optional[np.ndarray] = None
+    proba_class_labels: Optional[List[Any]] = None
     if hasattr(model, "predict_proba"):
         try:
-            probas = model.predict_proba(X)[:, 1]
+            probas = np.asarray(model.predict_proba(X))
+            if probas.ndim == 2:
+                model_classes = getattr(model, "classes_", list(range(probas.shape[1])))
+                proba_class_labels = list(model_classes)
         except Exception:
             probas = None
+            proba_class_labels = None
 
+    short_threshold, medium_threshold = thresholds
     true_counts = [count_tokens(txt, tokenizer) for txt in actual_outputs]
-    y_true = np.array([int(cnt > threshold) for cnt in true_counts])
+    y_true = np.array(
+        [length_class_from_tokens(cnt, short_threshold, medium_threshold) for cnt in true_counts],
+        dtype=int,
+    )
     y_pred = np.array(predictions).astype(int)
 
     acc = accuracy_score(y_true, y_pred)
-    report_txt = classification_report(y_true, y_pred, digits=4)
-    cm = confusion_matrix(y_true, y_pred).tolist()
+    report_txt = classification_report(
+        y_true,
+        y_pred,
+        labels=CLASS_ORDER,
+        target_names=[CLASS_NAMES[c] for c in CLASS_ORDER],
+        digits=4,
+        zero_division=0,
+    )
+    cm = confusion_matrix(y_true, y_pred, labels=CLASS_ORDER).tolist()
 
     os.makedirs(output_dir, exist_ok=True)
     df_out = pd.DataFrame(
@@ -349,14 +377,17 @@ def evaluate_dataset(
             "evaluated_output": actual_outputs,
             "output_source": output_source,
             "true_output_tokens": true_counts,
-            "true_label_long": y_true,
-            "predicted_label_long": y_pred,
+            "true_length_class": y_true,
+            "predicted_length_class": y_pred,
+            "true_length_label": [CLASS_NAMES.get(int(lbl), str(lbl)) for lbl in y_true],
+            "predicted_length_label": [CLASS_NAMES.get(int(lbl), str(lbl)) for lbl in y_pred],
         }
     )
-    if probas is not None:
-        df_out["predicted_prob_long"] = probas
+    if probas is not None and proba_class_labels is not None:
+        for col_idx, class_label in enumerate(proba_class_labels):
+            df_out[f"predicted_prob_class_{class_label}"] = probas[:, col_idx]
     df_path = os.path.join(output_dir, f"{spec.name}_predictions.csv")
-    df_out.to_csv(df_path, index=False)
+    df_out.to_csv(df_path, index=False, quoting=csv.QUOTE_MINIMAL)
 
     return {
         "dataset": spec.name,
@@ -410,10 +441,15 @@ def parse_args() -> argparse.Namespace:
         help="Override the default sample count for each dataset (<=0 keeps the dataset-specific default).",
     )
     parser.add_argument(
-        "--threshold",
+        "--thresholds",
         type=int,
-        default=500,
-        help="Token threshold that defines the long-output label.",
+        nargs=2,
+        metavar=("SHORT_MAX", "MEDIUM_MAX"),
+        default=(500, 1000),
+        help=(
+            "Token thresholds: <=SHORT_MAX=short, SHORT_MAX<x<=MEDIUM_MAX=medium, MEDIUM_MAX<x=long. "
+            "Defaults to 500 and 1000."
+        ),
     )
     parser.add_argument(
         "--tokenizer-model",
@@ -456,7 +492,11 @@ def parse_args() -> argparse.Namespace:
         default="out/real_dataset_eval",
         help="Directory where per-dataset CSV predictions and summary JSON are saved.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    short_max, medium_max = args.thresholds
+    if short_max >= medium_max:
+        parser.error("SHORT_MAX must be lower than MEDIUM_MAX for 3-class evaluation.")
+    return args
 
 
 def main() -> None:
@@ -484,6 +524,11 @@ def main() -> None:
     requested = [name.strip().lower() for name in args.datasets.split(",") if name.strip()]
     summaries: List[Dict[str, Any]] = []
 
+    thresholds = tuple(args.thresholds)
+    print(
+        f"Using class thresholds (short<= {thresholds[0]}, medium<= {thresholds[1]}, long> {thresholds[1]} tokens)."
+    )
+
     for name in requested:
         if name not in EVAL_DATASETS:
             raise ValueError(f"Unknown dataset '{name}'. Available: {', '.join(EVAL_DATASETS)}")
@@ -497,7 +542,7 @@ def main() -> None:
             scaler=scaler,
             feature_cols=features,
             tokenizer=tokenizer,
-            threshold=args.threshold,
+            thresholds=thresholds,
             output_dir=args.output_dir,
             text_generator=text_generator,
         )

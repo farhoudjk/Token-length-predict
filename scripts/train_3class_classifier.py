@@ -25,7 +25,7 @@ from catboost import CatBoostClassifier
 # -----------------------
 DATA_PATHS = [
     "out/out_v2_with_new_features.csv",
-    "out/dolly_inference_results_llama2_awq_with_new_features.csv"
+    "out/dolly_inference_results_llama2_awq (1).csv"
 ]
 OUTPUT_DIR = "out/clf_3class_results"  # different directory to avoid overwriting
 THRESHOLD_1 = 500    # <= 500 -> short (0)
