@@ -31,6 +31,25 @@ def read_prompts_csv(path: str) -> List[Dict[str, str]]:
     return rows
 
 
+def read_processed_prompt_ids(path: str) -> set:
+    """Read already processed prompt IDs from output CSV file."""
+    if not os.path.exists(path):
+        return set()
+    
+    processed_ids = set()
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if "prompt_id" in row:
+                    processed_ids.add(row["prompt_id"])
+    except Exception as e:
+        print(f"Warning: Could not read existing output file {path}: {e}")
+        return set()
+    
+    return processed_ids
+
+
 def write_rows_csv_batch(
     path: str,
     rows: List[Dict[str, Any]],
@@ -90,9 +109,30 @@ def main():
     ap.add_argument("--top_p", type=float, default=0.95)
     ap.add_argument("--max_time", type=float, default=None, help="(Not enforced per-request by vLLM)")
     ap.add_argument("--tensor_parallel_size", type=int, default=1)
+    ap.add_argument("--resume", action="store_true", help="Resume from existing output file if it exists")
     args = ap.parse_args()
 
     rows_in = read_prompts_csv(args.prompts_csv)
+    
+    # Handle resume functionality
+    processed_ids = set()
+    file_exists = os.path.exists(args.out_csv)
+    
+    if args.resume and file_exists:
+        processed_ids = read_processed_prompt_ids(args.out_csv)
+        print(f"Resume mode: Found {len(processed_ids)} already processed prompts")
+        # Filter out already processed prompts
+        original_count = len(rows_in)
+        rows_in = [r for r in rows_in if str(r.get("prompt_id", "")) not in processed_ids]
+        print(f"Resume mode: Processing {len(rows_in)} remaining prompts (skipping {original_count - len(rows_in)})")
+    elif file_exists and not args.resume:
+        # Remove existing file if not in resume mode
+        os.remove(args.out_csv)
+        print(f"Removed existing output file: {args.out_csv}")
+    
+    if not rows_in:
+        print("No prompts to process (all already completed)")
+        return
 
     # vLLM init
     llm = LLM(
@@ -122,10 +162,9 @@ def main():
         return max(1, min(args.ctx_cap - l - 1 for l in lens))
 
     total_rows = 0
-    # Optional: if file already exists, you may want to remove it to avoid appending
-    # to an old run. Comment out if you prefer appending.
-    if os.path.exists(args.out_csv):
-        os.remove(args.out_csv)
+    # Start with first batch index based on whether we're resuming
+    start_batch_idx = 0
+    write_header_for_first_batch = not (args.resume and file_exists and processed_ids)
 
     for batch_idx, batch in enumerate(chunked(rows_in, args.batch_size)):
         prompts = [str(r["prompt_text"]) for r in batch]
@@ -183,7 +222,7 @@ def main():
         write_rows_csv_batch(
             args.out_csv,
             batch_rows_out,
-            write_header=(batch_idx == 0),  # header only for first batch
+            write_header=write_header_for_first_batch and (batch_idx == 0),
         )
 
         total_rows += len(batch_rows_out)
