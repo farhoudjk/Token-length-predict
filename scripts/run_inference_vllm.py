@@ -164,7 +164,7 @@ def main():
     total_rows = 0
     # Start with first batch index based on whether we're resuming
     start_batch_idx = 0
-    write_header_for_first_batch = not (args.resume and file_exists and processed_ids)
+    write_header_for_first_batch = not (args.resume and os.path.exists(args.out_csv) and processed_ids)
 
     for batch_idx, batch in enumerate(chunked(rows_in, args.batch_size)):
         prompts = [str(r["prompt_text"]) for r in batch]
