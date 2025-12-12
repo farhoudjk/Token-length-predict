@@ -42,7 +42,7 @@ def read_processed_prompt_ids(path: str) -> set:
             reader = csv.DictReader(f)
             for row in reader:
                 if "prompt_id" in row:
-                    processed_ids.add(row["prompt_id"])
+                    processed_ids.add(str(row["prompt_id"]))
     except Exception as e:
         print(f"Warning: Could not read existing output file {path}: {e}")
         return set()
