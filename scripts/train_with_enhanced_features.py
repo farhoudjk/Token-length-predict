@@ -30,7 +30,7 @@ DATA_PATHS = [
 ]
 OUTPUT_DIR = "out/enhanced_clf_results"
 THRESHOLD_1 = 500    # <= 500 -> short (0)
-THRESHOLD_2 = 1000   # 500 < x <= 1000 -> medium (1), > 1000 -> long (2)
+THRESHOLD_2 = 2000   # 500 < x <= 1000 -> medium (1), > 1000 -> long (2)
 OUTPUT_COL = "output_tokens"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
