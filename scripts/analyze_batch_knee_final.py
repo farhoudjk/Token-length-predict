@@ -35,6 +35,7 @@ import argparse
 import json
 import os
 import time
+import gc
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -131,6 +132,7 @@ def build_llm(
     trust_remote_code: bool,
     max_num_seqs: int,
     max_num_batched_tokens: Optional[int],
+    gpu_memory_utilization: Optional[float],
 ) -> LLM:
     """
     NOTE: LLM() args vary slightly by vLLM version, but these are commonly supported.
@@ -146,6 +148,8 @@ def build_llm(
     )
     if max_num_batched_tokens is not None:
         kwargs["max_num_batched_tokens"] = max_num_batched_tokens
+    if gpu_memory_utilization is not None:
+        kwargs["gpu_memory_utilization"] = gpu_memory_utilization
     return LLM(**kwargs)
 
 
@@ -343,12 +347,27 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="If set, fixes vLLM token budget per iteration across sweeps (recommended).",
     )
+    p.add_argument(
+        "--gpu-memory-utilization",
+        type=float,
+        default=0.5,
+        help="Fraction of GPU memory to reserve for vLLM. Lower if init fails due to memory.",
+    )
 
     p.add_argument(
         "--submit-chunk-size",
         type=int,
         default=0,
         help="0 = submit all prompts in one generate() call. Otherwise submit in fixed chunks (constant across sweeps).",
+    )
+    p.add_argument(
+        "--reuse-engine",
+        action="store_true",
+        help=(
+            "Reuse a single vLLM engine per class to avoid re-initialization. "
+            "Note: max_num_seqs cannot be changed after init; we approximate "
+            "lower values by chunking requests per sweep."
+        ),
     )
 
     p.add_argument("--stop-on-eos", action="store_true")
@@ -421,6 +440,24 @@ def main() -> None:
     sampling_base = {"temperature": float(args.temperature), "top_p": float(args.top_p)}
 
     results: Dict[str, Dict[str, object]] = {}
+    shared_llm: Optional[LLM] = None
+    if args.reuse_engine:
+        max_bs = max(batch_sizes)
+        shared_llm = build_llm(
+            model_name=args.model_name,
+            ctx_cap=args.ctx_cap,
+            tensor_parallel_size=args.tensor_parallel_size,
+            dtype=args.dtype,
+            trust_remote_code=args.trust_remote_code,
+            max_num_seqs=max_bs,
+            max_num_batched_tokens=args.max_num_batched_tokens,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+        )
+        if args.submit_chunk_size == 0:
+            print(
+                "reuse-engine enabled: submit_chunk_size will track each batch size to approximate "
+                "max_num_seqs (submission pattern varies across sweeps)."
+            )
 
     for cfg in DEFAULT_CLASSES:
         label = cfg.name
@@ -432,15 +469,22 @@ def main() -> None:
         for bs in batch_sizes:
             print(f"Running max_num_seqs={bs} ({label}) ...")
 
-            llm = build_llm(
-                model_name=args.model_name,
-                ctx_cap=args.ctx_cap,
-                tensor_parallel_size=args.tensor_parallel_size,
-                dtype=args.dtype,
-                trust_remote_code=args.trust_remote_code,
-                max_num_seqs=bs,
-                max_num_batched_tokens=args.max_num_batched_tokens,
-            )
+            llm = shared_llm
+            if llm is None:
+                llm = build_llm(
+                    model_name=args.model_name,
+                    ctx_cap=args.ctx_cap,
+                    tensor_parallel_size=args.tensor_parallel_size,
+                    dtype=args.dtype,
+                    trust_remote_code=args.trust_remote_code,
+                    max_num_seqs=bs,
+                    max_num_batched_tokens=args.max_num_batched_tokens,
+                    gpu_memory_utilization=args.gpu_memory_utilization,
+                )
+
+            submit_chunk_size = args.submit_chunk_size
+            if args.reuse_engine and submit_chunk_size == 0:
+                submit_chunk_size = bs
 
             metrics = run_setting(
                 llm=llm,
@@ -452,7 +496,7 @@ def main() -> None:
                 sampling_base=sampling_base,
                 stop_token_ids=stop_token_ids,
                 warmup_iters=args.warmup_iters,
-                submit_chunk_size=args.submit_chunk_size,
+                submit_chunk_size=submit_chunk_size,
             )
             class_metrics.append(metrics)
 
@@ -487,6 +531,16 @@ def main() -> None:
                 "fallback_lat indicates how many requests used batch wall-time fallback."
             ),
         }
+
+    if shared_llm is not None:
+        del shared_llm
+        gc.collect()
+        try:  # best-effort cleanup
+            import torch
+
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
 
     if args.output_json:
         with open(args.output_json, "w", encoding="utf-8") as fh:
