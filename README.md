@@ -73,6 +73,13 @@ python scripts/evaluate_real_datasets.py \
   --generation-batch-size 8 \
   --output-dir out/real_dataset_eval_xgb_live4096
 
+#For Knee Points
+  cd /home/ubuntu/Token-length-predict
+VLLM_WORKER_MULTIPROC_METHOD=spawn .venv/bin/python scripts/analyze_batch_knee_final.py \
+  --input-csv out/out_v2.csv \
+  --samples-per-class 10 \
+  --batch-sizes 8,16,24,32,40 \
+  --reuse-engine \
+  --output-json out/knee_check_10.json
 
-  
 ```
