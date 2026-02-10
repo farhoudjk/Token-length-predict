@@ -1,0 +1,10 @@
+Analyzed: out/vllm_deepseek_v2_lite_chat.csv
+Total rows: 12558
+
+1 <= tokens < 9 (error): 454 (3.62%)
+10 <= tokens <= 500 (short answer): 9721 (77.41%)
+501 <= tokens <= 2000 (medium answer): 2050 (16.32%)
+2001 <= tokens <= 4096 (exhaustive answer): 306 (2.44%)
+
+missing token count: 0 (0.00%)
+other (out-of-range / unexpected): 27 (0.22%)

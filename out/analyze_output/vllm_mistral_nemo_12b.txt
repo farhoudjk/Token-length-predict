@@ -1,0 +1,10 @@
+Analyzed: out/vllm_mistral_nemo_12b.csv
+Total rows: 12559
+
+1 <= tokens < 9 (error): 2216 (17.64%)
+10 <= tokens <= 500 (short answer): 7534 (59.99%)
+501 <= tokens <= 2000 (medium answer): 2367 (18.85%)
+2001 <= tokens <= 4096 (exhaustive answer): 427 (3.40%)
+
+missing token count: 0 (0.00%)
+other (out-of-range / unexpected): 15 (0.12%)

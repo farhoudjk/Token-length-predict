@@ -1,0 +1,10 @@
+Analyzed: out/vllm_deepseek_r1_distill_qwen_14b_dolly15k.csv
+Total rows: 12560
+
+1 <= tokens < 9 (error): 0 (0.00%)
+10 <= tokens <= 500 (short answer): 5800 (46.18%)
+501 <= tokens <= 2000 (medium answer): 6019 (47.92%)
+2001 <= tokens <= 4096 (exhaustive answer): 741 (5.90%)
+
+missing token count: 0 (0.00%)
+other (out-of-range / unexpected): 0 (0.00%)
