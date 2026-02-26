@@ -1,0 +1,18 @@
+{
+  "accuracy": 0.6698771172367984,
+  "macro_f1": 0.6244708849984792,
+  "confusion_matrix": [
+    [
+      1532,
+      630
+    ],
+    [
+      364,
+      485
+    ]
+  ],
+  "class_names": [
+    "short",
+    "long/medium"
+  ]
+}

@@ -1,4 +1,4 @@
-#!/home/ubuntu/Token-length-predict/.venv/bin/python3
+#!/home/ubuntu/projects/Token-length-predict/.venv/bin/python3
 # -*- coding: utf-8 -*-
 import re
 import sys

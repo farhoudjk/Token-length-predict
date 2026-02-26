@@ -13,3 +13,5 @@ vllm_env/
 # Ignore generated data
 *.csv
 
+*.pkl
+*.pkl

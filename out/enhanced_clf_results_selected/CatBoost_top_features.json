@@ -1,0 +1,17 @@
+{
+  "caps_ratio": 16.479215020897374,
+  "punct_density": 15.447787779621297,
+  "avg_word_len": 14.525509798472825,
+  "avg_line_len": 9.998234165828183,
+  "question_marks": 8.41848562710838,
+  "prompt_has_question": 7.964783440465512,
+  "char_len": 7.21630524869254,
+  "prompt_char_len": 6.801490958779318,
+  "word_count": 5.33583121701114,
+  "prompt_word_count": 4.132865260714015,
+  "line_count": 1.6222751228496288,
+  "has_math": 1.301292365591463,
+  "has_table": 0.6032696525158227,
+  "has_url": 0.0715014806585507,
+  "exclamation_marks": 0.05030457972467709
+}
