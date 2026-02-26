@@ -73,13 +73,13 @@ if USE_3CLASS:
     THRESHOLD_2 = 2000
     CLASS_NAMES = ['short', 'medium', 'long']
 else:
-    THRESHOLD_1 = 500
+    THRESHOLD_1 = 300
     THRESHOLD_2 = None
     CLASS_NAMES = ['short', 'long/medium']
 
 CV_FOLDS = 5
 RANDOM_STATE = 42
-VAL_SPLIT = 0.15
+VAL_SPLIT = 0.05
 
 # ────────────────────────────────────────────────
 # HELPERS
@@ -242,7 +242,7 @@ print("\nClass distribution (%):")
 print(y.value_counts(normalize=True).sort_index() * 100)
 
 X_train_full, X_test, y_train_full, y_test = train_test_split(
-    X, y, test_size=0.20, random_state=RANDOM_STATE, stratify=y
+    X, y, test_size=0.07, random_state=RANDOM_STATE, stratify=y
 )
 
 X_train, X_val, y_train, y_val = train_test_split(
