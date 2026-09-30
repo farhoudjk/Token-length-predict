@@ -7,3 +7,4 @@ catboost_info/
 data/*.csv
 deploy/per_model/
 deploy/*.pth
+logs/
