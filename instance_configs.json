@@ -1,18 +1,24 @@
 {
   "SHORT": {
     "group": "SHORT",
-    "optimal_m_seq": 220,
-    "gpu_mem_util": 0.9,
-    "tps": 1127.3,
-    "kv_avg_pct": 22.03,
-    "kv_peak_pct": 32.6
+    "optimal_m_seq": 300,
+    "gpu_mem_util": 0.41,
+    "tps": 2390.48,
+    "tpot_ms": 0.42,
+    "avg_latency_s": 49.24,
+    "p95_latency_s": 49.24,
+    "kv_peak_pct": 57.4,
+    "kv_avg_pct": 37.75
   },
   "LONG": {
     "group": "LONG",
-    "optimal_m_seq": 140,
-    "gpu_mem_util": 0.9,
-    "tps": 1253.36,
-    "kv_avg_pct": 36.17,
-    "kv_peak_pct": 49.2
+    "optimal_m_seq": 128,
+    "gpu_mem_util": 0.54,
+    "tps": 2326.84,
+    "tpot_ms": 0.43,
+    "avg_latency_s": 94.7,
+    "p95_latency_s": 94.7,
+    "kv_peak_pct": 68.5,
+    "kv_avg_pct": 49.8
   }
 }

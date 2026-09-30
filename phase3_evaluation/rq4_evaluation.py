@@ -23,11 +23,13 @@ Usage:
 
 import argparse
 import asyncio
+import atexit
 import gc
 import json
 import logging
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -74,18 +76,22 @@ except Exception as _e:
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 
 MODEL_ID     = "TheBloke/Llama-2-7B-Chat-AWQ"
+QUANTIZATION = None   # e.g. "fp8" when fp16 weights leave no KV room (DeepSeek-R1-Qwen-14B)
 VEC_PATH     = f"{PROJECT_ROOT}/deploy/v13_vectorizer.pkl"
 XGB_PATH     = f"{PROJECT_ROOT}/deploy/v13_xgb.json"
 INSTANCE_CFG = f"{PROJECT_ROOT}/instance_configs.json"
 
 MODEL_THRESHOLDS = {
     "meta-llama/Meta-Llama-3.1-8B-Instruct": 750,
+    "TheBloke/Llama-2-7B-Chat-AWQ":           200,
+    "TheBloke/Llama-2-13B-chat-AWQ":          200,
     "mistralai/Mistral-7B-Instruct-v0.1":     300,
     "mistralai/Mistral-7B-Instruct-v0.2":     300,
     "meta-llama/Llama-2-13b-chat-hf":         400,
-    "mistralai/Mistral-NeMo-12B-Instruct":    400,
+    "mistralai/Mistral-Nemo-Instruct-2407":   300,
     "deepseek-ai/DeepSeek-V2-Lite-Chat":      250,
     "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": 1000,
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B":  600,
 
 }
 TOKEN_THRESHOLD = MODEL_THRESHOLDS.get(MODEL_ID, 500)
@@ -160,9 +166,9 @@ VLLM_LOGGERS = (
 def get_test_pool(model_id: str, target_per_type: int = TARGET_PER_TYPE) -> list[str]:
     print("Loading test pool...")
     tokenizer    = AutoTokenizer.from_pretrained(model_id)
-    gsm_ds       = load_dataset("gsm8k", "main", split="test")
+    gsm_ds       = load_dataset("openai/gsm8k", "main", split="test")
     gsm8k        = list(gsm_ds.select(range(min(target_per_type, len(gsm_ds))))['question'])
-    he_ds        = load_dataset("openai_humaneval", split="test")
+    he_ds        = load_dataset("openai/openai_humaneval", split="test")
     humaneval    = list(he_ds.select(range(min(target_per_type, len(he_ds))))['prompt'])
     chat_ds      = load_dataset("allenai/WildChat-1M", split="train",
                                 streaming=True).take(target_per_type)
@@ -340,6 +346,7 @@ def _make_engine_args(m_seq: int, gpu_mem: float, role: str) -> AsyncEngineArgs:
         disable_log_stats=False,
         enable_prefix_caching=False,
         dtype="float16",
+        quantization=QUANTIZATION,
         max_model_len=MAX_MODEL_LEN,
         #trust_remote_code=True, #for deepseek
     )
@@ -552,6 +559,35 @@ def _worker_env(gpu_id: int) -> dict:
     return env
 
 
+# Each worker runs in its own process group so that killing the group also
+# kills vLLM's EngineCore child. Otherwise a failed run can leave an orphaned
+# engine holding GPU memory and every later launch fails on startup.
+_WORKER_PGIDS: list[int] = []
+
+
+def _spawn_worker(cmd, gpu_id: int) -> subprocess.Popen:
+    proc = subprocess.Popen(cmd, env=_worker_env(gpu_id), start_new_session=True)
+    _WORKER_PGIDS.append(proc.pid)
+    return proc
+
+
+def cleanup_workers(timeout: float = 30.0) -> None:
+    """Kill every worker process group spawned so far and wait until they exit."""
+    for pgid in _WORKER_PGIDS:
+        try: os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError: pass
+    deadline = time.time() + timeout
+    for pgid in _WORKER_PGIDS:
+        while time.time() < deadline:
+            try: os.killpg(pgid, 0)
+            except ProcessLookupError: break
+            time.sleep(0.2)
+    _WORKER_PGIDS.clear()
+
+
+atexit.register(cleanup_workers)
+
+
 def _make_worker_cmd(role, run_id, m_seq, gpu_mem, pfile, afile,
                      debug_kv, server_mode=False, bfile=None):
     cmd = [
@@ -566,6 +602,7 @@ def _make_worker_cmd(role, run_id, m_seq, gpu_mem, pfile, afile,
         "--budgets-file",  bfile or "",
         "--model",         MODEL_ID,
     ]
+    if QUANTIZATION: cmd += ["--quantization", QUANTIZATION]
     if debug_kv:    cmd.append("--debug-kv")
     if server_mode: cmd.append("--server-mode")
     return cmd
@@ -580,6 +617,7 @@ def launch_parallel(
     role_b, prompts_b, arrivals_b, m_seq_b, gpu_b, util, debug_kv=False,
     budgets_a=None, budgets_b=None,
 ):
+    cleanup_workers()   # leftovers from a previously failed launch
     os.makedirs(BARRIER_DIR, exist_ok=True)
     os.makedirs(RESULT_DIR,  exist_ok=True)
 
@@ -600,9 +638,9 @@ def launch_parallel(
     bfile_b = write_token_budgets(run_id, role_b, budgets_b) if budgets_b else None
 
     print(f"\n  ▶ {role_a} (GPU={gpu_a}, M_Seq={m_seq_a}, util={util})")
-    proc_a = subprocess.Popen(
+    proc_a = _spawn_worker(
         _make_worker_cmd(role_a, run_id, m_seq_a, util, pfile_a, afile_a, debug_kv, bfile=bfile_a),
-        env=_worker_env(gpu_a))
+        gpu_a)
     t0 = time.time()
     while not os.path.exists(loaded_a):
         if time.time()-t0 > 300: proc_a.kill(); raise TimeoutError(role_a)
@@ -611,9 +649,9 @@ def launch_parallel(
     print(f"  ✓ {role_a} loaded")
 
     print(f"\n  ▶ {role_b} (GPU={gpu_b}, M_Seq={m_seq_b}, util={util})")
-    proc_b = subprocess.Popen(
+    proc_b = _spawn_worker(
         _make_worker_cmd(role_b, run_id, m_seq_b, util, pfile_b, afile_b, debug_kv, bfile=bfile_b),
-        env=_worker_env(gpu_b))
+        gpu_b)
     t0 = time.time()
     while not os.path.exists(loaded_b):
         if time.time()-t0 > 300: proc_a.kill(); proc_b.kill(); raise TimeoutError(role_b)
@@ -638,6 +676,7 @@ def launch_parallel(
 
 
 def launch_single(run_id, role, prompts, arrivals, m_seq, gpu, util, debug_kv=False, budgets=None):
+    cleanup_workers()   # leftovers from a previously failed launch
     os.makedirs(BARRIER_DIR, exist_ok=True)
     os.makedirs(RESULT_DIR,  exist_ok=True)
 
@@ -653,9 +692,9 @@ def launch_single(run_id, role, prompts, arrivals, m_seq, gpu, util, debug_kv=Fa
     bfile = write_token_budgets(run_id, role, budgets) if budgets else None
 
     print(f"\n  ▶ {role} (GPU={gpu}, M_Seq={m_seq}, n={len(prompts)})")
-    proc = subprocess.Popen(
+    proc = _spawn_worker(
         _make_worker_cmd(role, run_id, m_seq, util, pfile, afile, debug_kv, bfile=bfile),
-        env=_worker_env(gpu))
+        gpu)
     t0 = time.time()
     while not os.path.exists(loaded_f):
         if time.time()-t0 > 300: proc.kill(); raise TimeoutError(role)
@@ -681,7 +720,10 @@ def launch_single(run_id, role, prompts, arrivals, m_seq, gpu, util, debug_kv=Fa
 
 def launch_adaptive_realtime(
     run_id, short_m_seq, long_m_seq, all_prompts, preds, rate, util, debug_kv=False,
+    **dispatch_opts,
 ):
+    """dispatch_opts are forwarded to _dispatcher (route_by_class, load_aware)."""
+    cleanup_workers()   # leftovers from a previously failed launch
     os.makedirs(BARRIER_DIR, exist_ok=True)
     os.makedirs(RESULT_DIR,  exist_ok=True)
     os.makedirs(KV_STAT_DIR, exist_ok=True)
@@ -701,10 +743,10 @@ def launch_adaptive_realtime(
         if os.path.exists(f): os.remove(f)
 
     print(f"\n  ▶ SHORT server (GPU={GPU_A}, M_Seq={short_m_seq})")
-    proc_a = subprocess.Popen(
+    proc_a = _spawn_worker(
         _make_worker_cmd("SHORT", run_id, short_m_seq, util,
                          None, None, debug_kv, server_mode=True),
-        env=_worker_env(GPU_A))
+        GPU_A)
     t0 = time.time()
     while not os.path.exists(loaded_a):
         if time.time()-t0 > 300: proc_a.kill(); raise TimeoutError("SHORT")
@@ -713,10 +755,10 @@ def launch_adaptive_realtime(
     print(f"  ✓ SHORT loaded  (port {WORKER_PORTS[GPU_A]})")
 
     print(f"\n  ▶ LONG  server (GPU={GPU_B}, M_Seq={long_m_seq})")
-    proc_b = subprocess.Popen(
+    proc_b = _spawn_worker(
         _make_worker_cmd("LONG",  run_id, long_m_seq, util,
                          None, None, debug_kv, server_mode=True),
-        env=_worker_env(GPU_B))
+        GPU_B)
     t0 = time.time()
     while not os.path.exists(loaded_b):
         if time.time()-t0 > 300: proc_a.kill(); proc_b.kill(); raise TimeoutError("LONG")
@@ -734,6 +776,7 @@ def launch_adaptive_realtime(
         WORKER_PORTS[GPU_A], WORKER_PORTS[GPU_B],
         kv_a_file, kv_b_file,
         short_m_seq, long_m_seq,
+        **dispatch_opts,
     ))
 
     open(done_a, 'w').close()
@@ -771,9 +814,18 @@ async def _dispatcher(
     port_short, port_long,
     kv_a_file, kv_b_file,
     m_seq_short, m_seq_long,
+    route_by_class: bool = True,
+    load_aware: bool = True,
 ):
     """
     Bidirectional SM-aware work-stealing dispatcher.
+
+    Ablation switches (defaults = full TAILOR):
+      route_by_class : preferred server = predicted class. If False, the
+                       preferred server alternates round-robin (SHORT, LONG, ...).
+      load_aware     : KV/active load scores, spillover, overflow queue and
+                       SM work-stealing. If False, every request goes to its
+                       preferred server unconditionally.
 
     Primary routing  : load score = (active/m_seq) + kv_util
     Work-stealing    : triggered by real GPU SM utilisation (via pynvml)
@@ -927,55 +979,46 @@ async def _dispatcher(
     stealer_task = asyncio.create_task(sm_work_stealer())
 
     # ── main dispatch loop ────────────────────────────────────────────────────
+    ports = {"SHORT": port_short, "LONG": port_long}
+    other = {"SHORT": "LONG", "LONG": "SHORT"}
+
+    def dispatch(target, prompt, req_id, orig_cls):
+        """LONG budget on the SHORT server is tracked against MAX_STEAL_ACTIVE."""
+        route_counts[target] += 1
+        sender = send_and_track if (target == "SHORT" and orig_cls == "LONG") else send
+        pending.append(asyncio.create_task(sender(prompt, req_id, ports[target], orig_cls)))
+
     for i, (prompt, arrival, pred) in enumerate(zip(prompts, arrivals, preds)):
         elapsed = time.perf_counter() - wall_start
         if (s := float(arrival) - elapsed) > 0:
             await asyncio.sleep(s)
 
-        orig_cls = "SHORT" if pred == 0 else "LONG"
+        req_id    = f"req-{i}"
+        orig_cls  = "SHORT" if pred == 0 else "LONG"
+        preferred = orig_cls if route_by_class else ("SHORT" if i % 2 == 0 else "LONG")
+        alternate = other[preferred]
+
+        if not load_aware:
+            dispatch(preferred, prompt, req_id, orig_cls)
+            continue
 
         kv_s, act_s = read_stat(kv_a_file)
         kv_l, act_l = read_stat(kv_b_file)
-        sc_s = load_score(kv_s, act_s, m_seq_short)
-        sc_l = load_score(kv_l, act_l, m_seq_long)
+        score = {"SHORT": load_score(kv_s, act_s, m_seq_short),
+                 "LONG":  load_score(kv_l, act_l, m_seq_long)}
+        alt_capped = (alternate == "SHORT" and orig_cls == "LONG"
+                      and steal_active >= MAX_STEAL_ACTIVE)
 
-        if pred == 0:   # SHORT class
-            if sc_s <= sc_l + CLASS_BONUS:
-                # Normal: SHORT → SHORT server
-                route_counts["SHORT"] += 1
-                pending.append(asyncio.create_task(
-                    send(prompt, f"req-{i}", port_short, orig_cls)
-                ))
-            elif sc_l < OVERFLOW_THRESHOLD:
-                # Immediate spillover to LONG server
-                route_counts["LONG"] += 1
-                pending.append(asyncio.create_task(
-                    send(prompt, f"req-{i}", port_long, orig_cls)
-                ))
-                spillovers += 1
-            else:
-                # Both overloaded → overflow
-                await overflow_queue.put((prompt, f"req-{i}", orig_cls))
-                overflows += 1
-
-        else:           # LONG class
-            if sc_l <= sc_s + CLASS_BONUS:
-                # Normal: LONG → LONG server
-                route_counts["LONG"] += 1
-                pending.append(asyncio.create_task(
-                    send(prompt, f"req-{i}", port_long, orig_cls)
-                ))
-            elif sc_s < OVERFLOW_THRESHOLD and steal_active < MAX_STEAL_ACTIVE:
-                # Immediate spillover to SHORT server (with LONG budget)
-                route_counts["SHORT"] += 1
-                pending.append(asyncio.create_task(
-                    send_and_track(prompt, f"req-{i}", port_short, orig_cls)
-                ))
-                spillovers += 1
-            else:
-                # Overloaded or cap reached → overflow for SM-stealer
-                await overflow_queue.put((prompt, f"req-{i}", orig_cls))
-                overflows += 1
+        if score[preferred] <= score[alternate] + CLASS_BONUS:
+            dispatch(preferred, prompt, req_id, orig_cls)
+        elif score[alternate] < OVERFLOW_THRESHOLD and not alt_capped:
+            # Immediate spillover to the alternate server
+            dispatch(alternate, prompt, req_id, orig_cls)
+            spillovers += 1
+        else:
+            # Both overloaded or cap reached → overflow for SM-stealer
+            await overflow_queue.put((prompt, req_id, orig_cls))
+            overflows += 1
 
     dispatch_done.set()
 
@@ -1062,11 +1105,13 @@ def load_instance_configs():
     return cfg
 
 
-def load_classifier():
-    vectorizer = joblib.load(VEC_PATH)
+def load_classifier(vec_path=None, xgb_path=None):
+    vec_path   = vec_path or VEC_PATH
+    xgb_path   = xgb_path or XGB_PATH
+    vectorizer = joblib.load(vec_path)
     xgb_model  = XGBClassifier()
-    xgb_model.load_model(XGB_PATH)
-    print(f"   XGBoost: {XGB_PATH}  threshold={TOKEN_THRESHOLD}")
+    xgb_model.load_model(xgb_path)
+    print(f"   XGBoost: {xgb_path}")
     return xgb_model, vectorizer
 
 
@@ -1329,7 +1374,7 @@ def evaluate_rate_sweep(rate_start=8.0, rate_step=16.0, rate_end=76.0, debug_kv=
 # =============================================================================
 
 def main():
-    global MODEL_ID, TOKEN_THRESHOLD
+    global MODEL_ID, TOKEN_THRESHOLD, QUANTIZATION
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--worker",        action="store_true")
@@ -1347,8 +1392,11 @@ def main():
     parser.add_argument("--rate-step",     type=float, default=16.0)
     parser.add_argument("--rate-end",      type=float, default=76.0)
     parser.add_argument("--model",         type=str,   default=None)
+    parser.add_argument("--quantization",  type=str,   default=None,
+                        help="vLLM weight quantization, e.g. fp8 (default: none)")
     args = parser.parse_args()
 
+    QUANTIZATION = args.quantization
     if args.model:
         MODEL_ID        = args.model
         TOKEN_THRESHOLD = MODEL_THRESHOLDS.get(MODEL_ID, TOKEN_THRESHOLD)

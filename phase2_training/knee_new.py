@@ -47,6 +47,8 @@ LONG_CONFIGS    = [96, 128, 192, 256, 300]
 # Single-GPU memory partitioning
 GPU_GIB         = 40.0     # ← your GPU VRAM in GiB (40 / 80 for A100, 80 for H100)
 WEIGHT_GIB      =  3.67    # model weights per instance  (from vLLM startup log)
+MAX_MODEL_LEN   = None     # None = model default; set for long-context models (e.g. Nemo 128k)
+QUANTIZATION    = None     # e.g. "fp8" when fp16 weights do not fit (DeepSeek-R1-Qwen-14B)
 GRAPH_GIB       =  0.54    # CUDA graphs per instance    (from vLLM startup log)
 SAFETY_MARGIN   =  0.05    # fraction reserved for driver / OS
 SHORT_KV_SHARE  =  0.40    # SHORT gets 40% of usable KV budget
@@ -64,10 +66,10 @@ def get_large_test_pool(model_id: str, num_samples: int = 800) -> list[str]:
     print(f"Loading {num_samples} samples...")
     tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    gsm_ds       = load_dataset("gsm8k", "main", split="test")
+    gsm_ds       = load_dataset("openai/gsm8k", "main", split="test")
     gsm8k        = list(gsm_ds.select(range(min(300, len(gsm_ds))))['question'])
 
-    he_ds        = load_dataset("openai_humaneval", split="test")
+    he_ds        = load_dataset("openai/openai_humaneval", split="test")
     humaneval    = list(he_ds.select(range(min(160, len(he_ds))))['prompt'])
 
     chat_ds      = load_dataset("allenai/WildChat-1M", split="train", streaming=True).take(340)
@@ -117,6 +119,8 @@ def run_benchmark(prompts: list[str], m_seq: int, model_id: str, name: str = "Ba
         max_num_seqs=m_seq,
         gpu_memory_utilization=0.95,
         dtype="float16",
+        quantization=QUANTIZATION,
+        max_model_len=MAX_MODEL_LEN,
         trust_remote_code=True,
         disable_log_stats=False,       # must be False — drives KV log lines
         enable_prefix_caching=False,   # disabled for clean benchmarking
@@ -424,12 +428,16 @@ if __name__ == "__main__":
     ap.add_argument("--weight_gib",    type=float, default=WEIGHT_GIB)
     ap.add_argument("--short_configs", default=None)
     ap.add_argument("--long_configs",  default=None)
+    ap.add_argument("--max_model_len", type=int,   default=MAX_MODEL_LEN)
+    ap.add_argument("--quantization",  default=QUANTIZATION)
     args = ap.parse_args()
 
     MODEL_ID        = args.model
     TOKEN_THRESHOLD = args.threshold
     GPU_GIB         = args.gpu_gib
     WEIGHT_GIB      = args.weight_gib
+    MAX_MODEL_LEN   = args.max_model_len
+    QUANTIZATION    = args.quantization
     if args.short_configs:
         SHORT_CONFIGS = [int(x) for x in args.short_configs.split(",")]
     if args.long_configs:

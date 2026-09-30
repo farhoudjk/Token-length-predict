@@ -1,0 +1,9 @@
+# Local environment and caches
+.venv/
+__pycache__/
+catboost_info/
+
+# Large inputs downloaded from the Google Drive links (data/Data.txt, deploy/Link.txt)
+data/*.csv
+deploy/per_model/
+deploy/*.pth
