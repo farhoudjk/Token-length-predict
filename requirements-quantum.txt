@@ -1,0 +1,15 @@
+# .venv-quantum — QSVC predictor (phase3_evaluation/predict_qsvc.py)
+# QSVCModel.load() refuses to run unless these match the versions the bundle
+# was trained with (stored in qsvc_model.joblib). Trained on Python 3.13.9.
+#
+#   uv venv -p 3.13 .venv-quantum
+#   VIRTUAL_ENV=.venv-quantum uv pip install -r requirements-quantum.txt
+#
+# Keep this separate from .venv: vLLM 0.11's numba needs numpy <= 2.2.
+qiskit==2.3.1
+scikit-learn==1.7.2
+numpy==2.3.5
+pandas==2.3.3
+joblib==1.5.2
+threadpoolctl==3.5.0
+scipy==1.16.3

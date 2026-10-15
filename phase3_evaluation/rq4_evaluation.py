@@ -102,7 +102,7 @@ GPU_B = 1
 UTIL_PER_GPU = 0.90
 
 # ── Engine configuration ──────────────────────────────────────────────────────
-MAX_MODEL_LEN    = 4096   # prompt(2000) + output(2048) = 4048 < 4096 ✓
+MAX_MODEL_LEN    = int(os.environ.get("TAILOR_MAX_MODEL_LEN", 4096))   # prompt(2000) + output(2048) = 4048 < 4096 ✓
 PROMPT_MAX_LEN   = 2000   # truncate prompts to leave room for 2048 output tokens
 MAX_OUTPUT_TOKENS = 2048  # realistic output length
 
@@ -123,9 +123,13 @@ SINGLE_M_SEQS   = []
 # CFG2 and CFG3 = user-defined overrides  ← edit these before running
 ADAPTIVE_CFG2 = {"short_m_seq": 300, "long_m_seq": 180}
 ADAPTIVE_CFG3 = {"short_m_seq": 300, "long_m_seq": 200}
+# Sampling temperature for all requests; TAILOR_TEMPERATURE=0 gives greedy,
+# repeatable outputs (so real output lengths do not change between runs).
+TEMPERATURE = float(os.environ.get("TAILOR_TEMPERATURE", 0.7))
+
 # Global params used by static/single baselines (max_tokens=2048, no class info)
 SAMPLING_PARAMS = SamplingParams(
-    temperature=0.7,
+    temperature=TEMPERATURE,
     max_tokens=MAX_OUTPUT_TOKENS,
     min_tokens=1,
     stop=["<|eot_id|>", "<|end_of_text|>"],
@@ -136,12 +140,16 @@ SAMPLING_PARAMS = SamplingParams(
 # Classifier predicts LONG  → allow up to 2048 tokens (full output)
 MAX_TOKENS_SHORT = 512
 MAX_TOKENS_LONG  = 2048
+# Uncapped runs: TAILOR_MAX_TOKENS gives every request the same budget (set
+# TAILOR_MAX_MODEL_LEN >= PROMPT_MAX_LEN + budget). Workers inherit the env.
+if os.environ.get("TAILOR_MAX_TOKENS"):
+    MAX_TOKENS_SHORT = MAX_TOKENS_LONG = int(os.environ["TAILOR_MAX_TOKENS"])
 
 def make_sampling_params(cls: str) -> SamplingParams:
     """Create per-request SamplingParams based on classifier prediction."""
     max_out = MAX_TOKENS_SHORT if cls == "SHORT" else MAX_TOKENS_LONG
     return SamplingParams(
-        temperature=0.7,
+        temperature=TEMPERATURE,
         max_tokens=max_out,
         min_tokens=1,
         stop=["<|eot_id|>", "<|end_of_text|>"],
@@ -325,6 +333,7 @@ def _save_worker_result(result_file, role, wall, results, handler):
             "role": role, "wall": wall, "tokens": tokens,
             "kv_avg": kv_avg, "kv_peak": kv_peak, "preemptions": preempt,
             "ttfts": ttfts, "e2es": e2es,
+            "requests": results,
         }, f)
 
 
@@ -411,7 +420,7 @@ async def worker_main(args):
         elapsed = time.perf_counter() - wall_start
         if (s := arrival_offset - elapsed) > 0:
             await asyncio.sleep(s)
-        sp = (SamplingParams(temperature=0.7, max_tokens=max_tok, min_tokens=1,
+        sp = (SamplingParams(temperature=TEMPERATURE, max_tokens=max_tok, min_tokens=1,
                              stop=["<|eot_id|>", "<|end_of_text|>"])
               if max_tok is not None else SAMPLING_PARAMS)
         submit_t = time.perf_counter()
@@ -469,7 +478,16 @@ async def _worker_server_mode(args, engine_args, handler,
     stop_broadcast  = asyncio.Event()
 
     async def kv_broadcast():
+        tick = 0
         while not stop_broadcast.is_set():
+            # vLLM V1 only emits "GPU KV cache usage" (parsed by StatsHandler)
+            # when do_log_stats() is called; without this current_kv stays 0.
+            if tick % 2 == 0:
+                try:
+                    await engine.do_log_stats()
+                except Exception:
+                    pass
+            tick += 1
             try:
                 with open(kv_stat_file, 'w') as f:
                     json.dump({
@@ -511,6 +529,10 @@ async def _worker_server_mode(args, engine_args, handler,
                 sp  = make_sampling_params(cls) if cls in ("SHORT","LONG") else SAMPLING_PARAMS
                 active_requests += 1
                 submit_t = time.perf_counter()
+                # Time between arrival at the dispatcher and reaching this
+                # server (overflow queue); counted in TTFT/E2E below.
+                wait = (max(0.0, time.time() - req["arrival_ts"])
+                        if req.get("arrival_ts") else 0.0)
                 ttft, last_out = None, None
                 try:
                     async for out in engine.generate(prompt, sp, req_id):
@@ -524,8 +546,12 @@ async def _worker_server_mode(args, engine_args, handler,
                 e2e    = time.perf_counter() - submit_t
                 tokens = (len(last_out.outputs[0].token_ids)
                           if last_out and last_out.outputs else 0)
-                result = {"ttft": ttft or e2e, "e2e": e2e,
-                          "tokens": tokens, "role": role}
+                result = {"ttft": (ttft or e2e) + wait, "e2e": e2e + wait,
+                          "dispatch_wait": wait,
+                          "tokens": tokens, "role": role, "req_id": req_id,
+                          "cls": cls,
+                          "finish_reason": (last_out.outputs[0].finish_reason
+                                            if last_out and last_out.outputs else None)}
                 results_store.append(result)
                 writer.write((json.dumps(result) + "\n").encode())
                 await writer.drain()
@@ -848,6 +874,13 @@ async def _dispatcher(
     MAX_STEAL_ACTIVE  = 45    # max concurrent 2048-token requests on SHORT server
     OVERFLOW_THRESHOLD = 0.60 # score above which requests go to overflow
 
+    # TAILOR_STEAL_FIX=1: SM/score-driven overflow drain (see sm_work_stealer).
+    # The LONG-on-SHORT cap protects the 512-token SHORT server; with one
+    # shared budget (TAILOR_MAX_TOKENS) there is no such distinction.
+    HOLD_OVERFLOW = os.environ.get("TAILOR_STEAL_FIX") == "1"
+    if HOLD_OVERFLOW and MAX_TOKENS_SHORT == MAX_TOKENS_LONG:
+        MAX_STEAL_ACTIVE = 10**9
+
     # ── helpers ───────────────────────────────────────────────────────────────
     def read_stat(path):
         try:
@@ -868,6 +901,9 @@ async def _dispatcher(
     overflows       = 0
     route_counts    = {"SHORT": 0, "LONG": 0}
     overflow_queue  = asyncio.Queue()  # (prompt, req_id, orig_cls)
+    # Wall-clock arrival per request, sent to the worker so TTFT/E2E include
+    # time spent in the overflow queue before the request reached a server.
+    arrival_ts: dict[str, float] = {}
     dispatch_done   = asyncio.Event()
     steal_active    = 0   # live count of 2048-token requests on SHORT server
 
@@ -876,7 +912,8 @@ async def _dispatcher(
         """orig_cls sets token budget, NOT server destination."""
         r, w = await asyncio.open_connection("127.0.0.1", port)
         w.write((json.dumps({"prompt": prompt, "req_id": req_id,
-                              "cls": orig_cls}) + "\n").encode())
+                              "cls": orig_cls,
+                              "arrival_ts": arrival_ts.get(req_id)}) + "\n").encode())
         await w.drain()
         resp = await r.readline()
         w.close()
@@ -920,15 +957,28 @@ async def _dispatcher(
             sm_b = read_gpu_sm(GPU_B)   # LONG  server SM%
 
             # Determine where to steal
-            a_idle = sm_a < SM_IDLE_THRESHOLD or dispatch_done.is_set()
-            b_idle = sm_b < SM_IDLE_THRESHOLD or dispatch_done.is_set()
+            if HOLD_OVERFLOW:
+                # Keep overflow in the dispatcher until a GPU has capacity —
+                # also after the last arrival — so it is not dumped into one
+                # vLLM queue while the other GPU later idles. NVML util is
+                # time-based (~90% with a single request), so a load score
+                # below the spillover threshold also counts as capacity.
+                sc_a = load_score(*read_stat(kv_a_file), m_seq_short)
+                sc_b = load_score(*read_stat(kv_b_file), m_seq_long)
+                a_idle = sm_a < SM_IDLE_THRESHOLD or sc_a < OVERFLOW_THRESHOLD
+                b_idle = sm_b < SM_IDLE_THRESHOLD or sc_b < OVERFLOW_THRESHOLD
+                prefer_a = sc_a <= sc_b
+            else:
+                a_idle = sm_a < SM_IDLE_THRESHOLD or dispatch_done.is_set()
+                b_idle = sm_b < SM_IDLE_THRESHOLD or dispatch_done.is_set()
+                prefer_a = sm_a <= sm_b
 
             if not a_idle and not b_idle:
                 await asyncio.sleep(STEAL_POLL_S)
                 continue
 
             # Pick destination: prefer the more idle GPU
-            if a_idle and (not b_idle or sm_a <= sm_b):
+            if a_idle and (not b_idle or prefer_a):
                 target_port = port_short
                 target_name = "SHORT"
             else:
@@ -994,6 +1044,7 @@ async def _dispatcher(
             await asyncio.sleep(s)
 
         req_id    = f"req-{i}"
+        arrival_ts[req_id] = time.time()
         orig_cls  = "SHORT" if pred == 0 else "LONG"
         preferred = orig_cls if route_by_class else ("SHORT" if i % 2 == 0 else "LONG")
         alternate = other[preferred]

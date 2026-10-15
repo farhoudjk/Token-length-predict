@@ -15,6 +15,10 @@ ABL_NO_LOAD   Class routing only: SHORT → SHORT server, LONG → LONG server.
               No KV/load scores, no spillover, no overflow, no SM stealing.
 ABL_NO_CLASS  No class-based routing: preferred server alternates
               round-robin, then KV-aware spillover/overflow + SM stealing.
+ABL_NO_LOAD_QSVC
+              ABL_NO_LOAD routing with the quantum (QSVC) classifier instead
+              of XGBoost. Predictions are precomputed in .venv-quantum by
+              predict_qsvc.py and passed with --qsvc-preds.
 
 Token budgets (max_tokens 512 SHORT / 2048 LONG) always follow the classifier
 used by the variant. ABL_NO_CLASS keeps the default classifier's budgets so
@@ -44,6 +48,8 @@ Output
 """
 
 import argparse
+import hashlib
+import json
 import os
 import sys
 from pathlib import Path
@@ -59,6 +65,8 @@ VARIANTS = {
     "ABL_T500":     {"classifier": "t500",    "route_by_class": True,  "load_aware": True},
     "ABL_NO_LOAD":  {"classifier": "default", "route_by_class": True,  "load_aware": False},
     "ABL_NO_CLASS": {"classifier": "default", "route_by_class": False, "load_aware": True},
+    "ABL_NO_LOAD_QSVC": {"classifier": "qsvc", "route_by_class": True, "load_aware": False},
+    "TAILOR_QSVC":  {"classifier": "qsvc",    "route_by_class": True,  "load_aware": True},
 }
 
 
@@ -84,7 +92,41 @@ def clean_ipc_dirs():
                 except Exception: pass
 
 
-def run_variant(name, variant, rate, prompts, preds, short_m_seq, long_m_seq, debug_kv):
+def request_accuracy(rs, rl, preds, threshold, requests_csv):
+    """Per-request real output tokens → CSV, plus accuracy of preds against them.
+
+    Only meaningful when budgets don't depend on the class (TAILOR_MAX_TOKENS);
+    with 512/2048 budgets a request predicted SHORT cannot exceed 512 tokens.
+    """
+    reqs = rs.get("requests", []) + rl.get("requests", [])
+    if not reqs or "req_id" not in reqs[0]:
+        return {}
+    df = pd.DataFrame(reqs)
+    df["idx"] = df["req_id"].str.split("-").str[-1].astype(int)
+    df = df.sort_values("idx")
+    df["pred"] = preds[df["idx"].to_numpy()]
+    df["real_long"] = (df["tokens"] > threshold).astype(int)
+    os.makedirs(os.path.dirname(requests_csv), exist_ok=True)
+    df[["idx", "pred", "real_long", "tokens", "finish_reason", "cls", "role", "ttft", "e2e", "dispatch_wait"]] \
+        .to_csv(requests_csv, index=False)
+
+    truth, p = df["real_long"].to_numpy(), df["pred"].to_numpy()
+    rec_s = ((p == 0) & (truth == 0)).sum() / max(1, (truth == 0).sum())
+    rec_l = ((p == 1) & (truth == 1)).sum() / max(1, (truth == 1).sum())
+    return {
+        "Real_Thr":      threshold,
+        "Real_LONG":     int(truth.sum()),
+        "Accuracy":      float((p == truth).mean()),
+        "Balanced_Acc":  float((rec_s + rec_l) / 2),
+        "Recall_SHORT":  float(rec_s),
+        "Recall_LONG":   float(rec_l),
+        "Out_Tok_Median": float(df["tokens"].median()),
+        "Hit_Max_Tokens": int((df["finish_reason"] == "length").sum()),
+    }
+
+
+def run_variant(name, variant, rate, prompts, preds, short_m_seq, long_m_seq, debug_kv,
+                threshold=None, requests_csv=None):
     print("\n" + "=" * 60)
     print(f"  {name}  routing={routing_label(variant)}  "
           f"SHORT_M={short_m_seq}  LONG_M={long_m_seq}  (rate={rate})")
@@ -120,6 +162,9 @@ def run_variant(name, variant, rate, prompts, preds, short_m_seq, long_m_seq, de
         "Preemptions":    s["preemptions"],
         "Preempt_Rate%":  s["preemption_rate"],
         "Total_S":        s["wall_clock"],
+        "Max_Tokens":     f"{m.MAX_TOKENS_SHORT}/{m.MAX_TOKENS_LONG}",
+        "Temperature":    m.TEMPERATURE,
+        **(request_accuracy(rs, rl, preds, threshold, requests_csv) if requests_csv else {}),
     }
 
 
@@ -153,6 +198,10 @@ def main():
                         help="Profiled M_Seq configs from knee_new.py for this model")
     parser.add_argument("--t500-dir",   type=str,   default=f"{m.PROJECT_ROOT}/deploy/ablation_t500",
                         help="Directory holding v13_vectorizer.pkl + v13_xgb.json trained with threshold 500")
+    parser.add_argument("--qsvc-preds", type=str,   default=None,
+                        help="0/1 predictions .npy from predict_qsvc.py (required for ABL_NO_LOAD_QSVC)")
+    parser.add_argument("--qsvc-threshold", type=int, default=930,
+                        help="Output-token threshold the QSVC was trained with (bundle label_median)")
     parser.add_argument("--quantization", type=str, default=None,
                         help="vLLM weight quantization for workers, e.g. fp8 (default: none)")
     parser.add_argument("--out",        type=str,   default="ablation_results.csv")
@@ -169,7 +218,9 @@ def main():
         "t500":    (os.path.join(args.t500_dir, "v13_vectorizer.pkl"), os.path.join(args.t500_dir, "v13_xgb.json")),
     }
     needed = {VARIANTS[n]["classifier"] for n in names}
-    for clf in needed:
+    if "qsvc" in needed and not (args.qsvc_preds and os.path.exists(args.qsvc_preds)):
+        parser.error("ABL_NO_LOAD_QSVC needs --qsvc-preds — see predict_qsvc.py")
+    for clf in needed - {"qsvc"}:
         missing = [p for p in clf_paths[clf] if not os.path.exists(p)]
         if missing:
             parser.error(f"{clf} classifier missing: {missing} — see the training command in this file's docstring")
@@ -189,9 +240,18 @@ def main():
     prompts     = m.get_test_pool(m.MODEL_ID)
 
     preds_by_clf = {}
-    for clf in sorted(needed):
+    for clf in sorted(needed - {"qsvc"}):
         print(f"\n[Classifier] {clf}")
         preds_by_clf[clf] = predict(prompts, *clf_paths[clf])
+    if "qsvc" in needed:
+        print(f"\n[Classifier] qsvc  ({args.qsvc_preds})")
+        sha_file = args.qsvc_preds + ".sha256"
+        sha = hashlib.sha256(json.dumps(prompts).encode()).hexdigest()
+        if not os.path.exists(sha_file) or open(sha_file).read().strip() != sha:
+            sys.exit("❌ QSVC predictions were made for a different prompt pool — rerun export_qsvc_features.py")
+        preds = np.load(args.qsvc_preds).astype(int)
+        print(f"   SHORT={int((preds == 0).sum())}  LONG={int((preds == 1).sum())}")
+        preds_by_clf["qsvc"] = preds
 
     print(f"\nModel={m.MODEL_ID}  Prompts={len(prompts)}  Rates={[round(r, 1) for r in rates]}")
     print(f"Variants={names}")
@@ -209,10 +269,15 @@ def main():
                 print(f"  ↷ {name} @ rate={rate} already done — skipping")
                 continue
             variant = VARIANTS[name]
+            thr = {"default": m.TOKEN_THRESHOLD, "t500": 500,
+                   "qsvc": args.qsvc_threshold}[variant["classifier"]]
+            req_csv = os.path.join(os.path.splitext(args.out)[0] + "_requests",
+                                   f"{name}_r{int(rate)}.csv")
             try:
                 rows.append(run_variant(
                     name, variant, rate, prompts, preds_by_clf[variant["classifier"]],
                     short_m_seq, long_m_seq, args.debug_kv,
+                    threshold=thr, requests_csv=req_csv,
                 ))
                 pd.DataFrame(rows).to_csv(args.out, index=False)
                 print(f"\n  💾 {len(rows)} rows → {args.out}")
